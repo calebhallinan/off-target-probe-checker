@@ -3,9 +3,11 @@
 from opt.commons import *
 from opt import flip, track, stat
 
+VERSION="v0.0.2"
+
 def parse():
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('--version', action='version', version='%(prog)s v0.0.1')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {VERSION}')
 
     # common args
     parser.add_argument('-o', '--out-dir', type=str, required=True, help="output dir")

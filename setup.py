@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setup(
 	name="opt",
-	version="0.0.1",
+	version="0.0.2",
 	author="HJ Ji, C Hallinan",
 	author_email="hji20@jh.edu, challin1@jh.edu",
 	description="detect off-target probe activities through alignment of probes to transcripts",
@@ -22,6 +22,7 @@ setup(
         'pandas',
         'biopython',
         'pyfastx',
+        'requests',
         'setuptools'
     ],
 	python_requires='>=3.8',
