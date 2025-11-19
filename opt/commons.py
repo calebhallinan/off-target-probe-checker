@@ -11,20 +11,32 @@ from Bio.Seq import Seq
 import json
 from pathlib import Path
 
-RED = '\033[31m'
-GREEN = '\033[32m'
-RESET = '\033[0m'
+# ANSI colors
+RED          = '\033[31m'
+GREEN        = '\033[32m'
+YELLOW       = '\033[33m'
+BLUE         = '\033[34m'
+CYAN         = '\033[36m'
+LIGHT_GREEN  = '\033[92m'
+LIGHT_PURPLE = '\033[95m'
+RESET        = '\033[0m'
 
 class Mtype(Enum):
-    PROG = (GREEN, "PROGRESS")
-    ERR = (RED, "ERROR")
-    WARN = (RED, "WARNING")
+    START  = (LIGHT_PURPLE,         "START")
+    INFO   = (CYAN,         "PROGRESS")
+    RESULT = (GREEN,  "RESULT")
+    WARN   = (YELLOW,       "WARNING")
+    ERROR  = (RED,          "ERROR")
+    DONE   = (LIGHT_PURPLE, "DONE")
 
+
+# return error message if not in current error list
 def message(s, mtype) -> str:
     if mtype not in Mtype:
         raise Exception("Error while printing message")
     return f"{datetime.now()} {mtype.value[0]}{mtype.value[1]}{RESET} {s}"
 
+# check if gff or gtf
 def check_annotation_ext(fn) -> str:
     file_ext = Path(fn).suffix.lower()
     att_sep = None
@@ -33,17 +45,18 @@ def check_annotation_ext(fn) -> str:
     elif file_ext == '.gff':
         att_sep =  '='
     else:
-        print(message(f"recognized annotation format; must either be gff or gtf", Mtype.ERR))
+        print(message(f"recognized annotation format; must either be gff or gtf", Mtype.ERROR))
         sys.exit(-1)
     return att_sep
 
+# main align function for flipping probes
 def align(qfn, tfn, prefix, norc, args) -> str:
     ofn = os.path.join(args.out_dir, f'{prefix}.bam' if args.bam else f'{prefix}.sam')
     if args.binary:
         aligner = args.binary
     else:
         aligner = "bowtie2" if args.bowtie2 else "nucmer"
-    print(message(f"aligner: {aligner}", Mtype.PROG))
+    print(message(f"running the {aligner} aligner", Mtype.INFO))
     if args.bowtie2: # bt2 flow
         idx_fn = os.path.join(args.out_dir, 'target')
         if not args.skip_index:
@@ -52,7 +65,7 @@ def align(qfn, tfn, prefix, norc, args) -> str:
             call(cmd, shell=True)
 
         if not os.path.exists(f'{idx_fn}.1.bt2'):
-            print(message(f"bt2 index missing; please remove --skip-index flag", Mtype.ERR))
+            print(message(f"bt2 index missing; please remove --skip-index flag", Mtype.ERROR))
             sys.exit(-1)
 
         # add --norc flag if 2nd alignment
@@ -92,7 +105,7 @@ def align_nm(qfn, tfn, prefix, args) -> str:
         aligner = args.binary
     else:
         aligner = "mummer" # mummer is the only compatible aligner here
-    print(message(f"aligner: {aligner}", Mtype.PROG))
+    print(message(f"running the {aligner} aligner", Mtype.INFO))
     cmd = f'{aligner} -maxmatch -l {args.min_exact_match} -t {args.threads} ' + \
         f'{tfn} {qfn} > {ofn}'
     print(cmd); call(cmd, shell=True)
@@ -110,21 +123,29 @@ def att2dict(s, sep):
     return d
 
 # tinfo <k,v> = <transcript_id, gene_id>
+# build the transcript to gene map
 def build_tinfos(fn, att_sep, schema, keep_dot) -> dict:
     df = pd.read_csv(fn, sep='\t', header=None, comment='#')
     df.columns = ['ctg', 'src', 'feat', 'start', 'end', 'score', 'strand', 'frame', 'att']
     tinfos = dict()
     ctr = 0
+    missing_gene_names = 0
     for _, row in df.iterrows():
         if row['feat'] == schema[0]:
             ctr += 1
             att_d = att2dict(row['att'], att_sep)
+            # if schema[1] not in att_d or schema[2] not in att_d or schema[3] not in att_d or schema[4] not in att_d: 
             if schema[1] not in att_d or schema[2] not in att_d: 
-                print(message(f"Invalid schema", Mtype.ERR))
+                print(message(f"Invalid schema. Expected schema: {schema}. Actual schema: {att_d.keys()}. Change expected schema to correctly locate the necassary information", Mtype.ERROR))
                 return None # terminate
             tid = att_d[schema[1]]
             gid = att_d[schema[2]] if keep_dot else att_d[schema[2]].split('.')[0]
-            gname = att_d[schema[3]] if schema[3] in att_d else None
+            # if you cant get gene name then make None and print out total
+            if schema[3] in att_d:
+                gname = att_d[schema[3]]
+            else:
+                gname = None
+                missing_gene_names += 1
             if gname:
                 temp = gname.split(',')
                 if len(temp) > 1:
@@ -132,7 +153,9 @@ def build_tinfos(fn, att_sep, schema, keep_dot) -> dict:
                     gname = ';'.join(temp)
             ttype = att_d.get(schema[4], None)
             tinfos[tid] = (gid, gname, ttype)
-    print(message(f"loaded {ctr} transcripts", Mtype.PROG))
+    print(message(f"missing {missing_gene_names} gene names. If this number is high, the schema may need to be fixed", Mtype.INFO))
+    print(message(f"loaded {ctr} transcripts", Mtype.INFO))
+
     return tinfos
 
 def write_tinfos(fn, tinfos) -> None:
@@ -172,3 +195,72 @@ def get_unaligned(qfa, ainfos) -> list:
         if x.name not in ainfos:
             unaligned.append(x.name)
     return unaligned
+
+
+# add function to replace gene names with synonyms
+def replace_genenames_with_synonyms(query_fasta, gene_syn_csv, out_fasta):
+    """
+    query_fasta: input FASTA file
+    gene_syn_csv: CSV with 2 columns:
+                  col1 = original gene name (e.g. WARS),
+                  col2 = new gene name (e.g. WARS1)
+    out_fasta: output FASTA file with updated headers
+
+    Assumes FASTA headers like:
+        >ENSG00000140105|WARS|2532cc5
+    and replaces the middle field (WARS) using the synonym map.
+    """
+    # Read gene synonym mapping
+    df = pd.read_csv(gene_syn_csv, header=None)
+
+    # If the CSV has column names, normalize them:
+    if df.shape[1] < 2:
+        raise ValueError("Synonym file must have at least 2 columns")
+
+    # first 2 columns = original and new
+    df = df.iloc[:, :2]
+
+    syn_map = dict(zip(
+        df.iloc[:, 0].astype(str).str.strip(),
+        df.iloc[:, 1].astype(str).str.strip()
+    ))
+
+    # read and update FASTA
+    out_lines = []
+    replaced_count = 0
+
+    with open(query_fasta, 'r') as f:
+        for line in f:
+            if line.startswith('>'):
+                header = line[1:].strip()
+
+                # Split off any whitespace comment after the main ID block
+                main_part, *rest_ws = header.split(None, 1)
+                rest = rest_ws[0] if rest_ws else ""
+
+                # split using | into 3 parts
+                parts = main_part.split('|')
+
+                if len(parts) >= 2:
+                    gene_symbol = parts[1]
+                    # grab gene name and replace if in syn map
+                    if gene_symbol in syn_map:
+                        parts[1] = syn_map[gene_symbol]
+                        replaced_count += 1
+
+                new_main = "|".join(parts)
+                new_header = ">" + new_main
+                if rest:
+                    new_header += " " + rest
+                new_header += "\n"
+
+                out_lines.append(new_header)
+            else:
+                out_lines.append(line)
+
+    # write new FASTA
+    with open(out_fasta, 'w') as f:
+        f.writelines(out_lines)
+    
+
+
