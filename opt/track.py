@@ -345,7 +345,7 @@ def write_results(ainfos, d) -> list:
 
             # handle cases with none values      
             gids_s = ','.join([str(x) for x in gids])
-            gnames_s = ','.join('None' if x is None else x for x in gnames)
+            gnames_s = ','.join('None' if x is None else str(x) for x in gnames)
             cigar_s = ','.join([str(x) for x in cigars])
             ttypes_s = ','.join([str(x) for x in ttypes])
             tnames_s = ','.join([str(x) for x in tnames])
@@ -374,7 +374,7 @@ def write_results(ainfos, d) -> list:
 
             # handle cases with none values      
             gids_s = ','.join([str(x) for x in gids])
-            gnames_s = ','.join('None' if x is None else x for x in gnames)
+            gnames_s = ','.join('None' if x is None else str(x) for x in gnames)
             cigar_s = ','.join([str(x) for x in cigars])
             ttypes_s = ','.join([str(x) for x in ttypes])
             tnames_s = ','.join([str(x) for x in tnames])
@@ -384,11 +384,12 @@ def write_results(ainfos, d) -> list:
     return no_hit
 
 def main(args) -> None:
-    print(message(f"aligning query probes to target transcripts", Mtype.PROG))
+    print(message(f"TRACK module is aligning flipped probes to source transcripts", Mtype.START))
+    # print(message(f"aligning query probes to target transcripts", Mtype.INFO))
     
     # if in all mode, make query fwd_oriented.fa
     if args.module == 'all':
-        print(message(f"using fwd_oriented.fa probes", Mtype.PROG))
+        print(message(f"using fwd_oriented.fa probes", Mtype.INFO))
         args.query = os.path.join(args.out_dir, 'fwd_oriented.fa')
 
     if args.one_mismatch:
@@ -397,18 +398,24 @@ def main(args) -> None:
         afn = align(args.query, args.target, "track", True, args)
     qfa = pyfastx.Fasta(args.query)
 
-    print(message(f"loading target transcriptome infos", Mtype.PROG))
-    fn = os.path.join(args.out_dir, 'track_t2g.csv')
-    if not os.path.exists(fn) or args.force:
-        # att_sep = ' ' if args.gtf else '='
-        att_sep = check_annotation_ext(args.annotation)
-        print(message(f"building t2g mappings", Mtype.PROG))
-        tinfos = build_tinfos(args.annotation, att_sep, args.schema, args.keep_dot)
-        write_tinfos(fn, tinfos)
+    # print(message(f"loading target transcriptome infos", Mtype.INFO))
+
+    # if all mode, read in flip_t2g.csv else make a t2g
+    if args.module == 'all':
+        tinfos = load_tinfos(os.path.join(args.out_dir, 'flip_t2g.csv'))
+        print(message(f"load in transcript to gene mappings from FLIP module", Mtype.INFO))
     else:
-        tinfos = load_tinfos(fn)
-    
-    print(message(f"detecting potential off-target probe activities", Mtype.PROG))
+        fn = os.path.join(args.out_dir, 'track_t2g.csv')
+        if not os.path.exists(fn) or args.force:
+            # att_sep = ' ' if args.gtf else '='
+            att_sep = check_annotation_ext(args.annotation)
+            print(message(f"building transcript to gene mappings", Mtype.INFO))
+            tinfos = build_tinfos(args.annotation, att_sep, args.schema, args.keep_dot)
+            write_tinfos(fn, tinfos)
+        else:
+            tinfos = load_tinfos(fn)
+
+    # print(message(f"detecting potential off-target probe activities", Mtype.INFO))
     if not args.one_mismatch:
         ainfos = track_target_pad(afn, qfa, args.pad_length, tinfos, not args.bowtie2)
         unaligned = get_unaligned(qfa, ainfos)
@@ -416,9 +423,9 @@ def main(args) -> None:
         tfa = pyfastx.Fasta(args.target)
         ainfos = track_target_one_mismatch(afn, qfa, tfa, tinfos)
         unaligned = get_unaligned(qfa, ainfos)
-    print(message(f"{len(unaligned)} / {len(qfa)} probes unmapped", Mtype.PROG))
+    print(message(f"{len(unaligned)} / {len(qfa)} probes unmapped. See track.unmapped.txt", Mtype.RESULT))
     write_lst2file(unaligned, os.path.join(args.out_dir, 'track.unmapped.txt'))
     no_hit = write_results(ainfos, args.out_dir)
     write_lst2file(no_hit, os.path.join(args.out_dir, 'track.no_hit.txt'))
-    print(message(f"{len(no_hit)} / {len(qfa) - len(unaligned)} mapped probes with no passing hit", Mtype.PROG))
-    print(message(f"finished", Mtype.PROG))
+    print(message(f"{len(no_hit)} / {len(qfa) - len(unaligned)} mapped probes with no passing hit. See track.no_hit.txt", Mtype.RESULT))
+    print(message(f"finished tracking probes", Mtype.DONE))

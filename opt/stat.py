@@ -93,9 +93,9 @@ def load_track_results(df, d, gene_syns, exclude_ps, pc_only) -> dict:
             prb_gene_tbl[p_gname] = ProbeGene(p_gid, p_gname)
         prb_gene_tbl[p_gname].add_prb(prb)
         assert pid in prb_gene_tbl[p_gname].probe_hits # sanity check
-    print(message(f"number of probes missing targets: {len(missed_target_prbs)}", Mtype.PROG))
+    print(message(f"{len(missed_target_prbs)} probes missing targets. See stat_missed_probes.txt", Mtype.RESULT))
     write_lst2file(missed_target_prbs, os.path.join(d, 'stat_missed_probes.txt'))
-    print(message(f"number of probes with off-target binding: {len(multi_target_prbs)}", Mtype.PROG))
+    print(message(f"{len(multi_target_prbs)} probes with off-target binding. See stat_off_target_probes.txt", Mtype.RESULT))
     write_lst2file(multi_target_prbs, os.path.join(d, 'stat_off_target_probes.txt'))
     return prb_gene_tbl
 
@@ -142,15 +142,36 @@ def write_summary(d, agg, pgene_info, gene_syns):
     missed_target = []
     off_target = []
     fn = os.path.join(d, 'collapsed_summary.tsv')
-    print(message(f"{len(clpsed)} / {len(pgene_info)} probe genes with at least 1 probe binding", Mtype.PROG))
-    with open(fn, 'w') as fh:
-        fh.write('target_gene\tn\taligned_to\tn_hits\tn_probes\n')
+    fn_off = os.path.join(d, 'collapsed_summary_offtargets.tsv')
+
+    with open(fn, 'w') as fh, open(fn_off, 'w') as fh_off:
+        header = 'target_gene\tn\taligned_to\tn_hits\tn_probes\n'
+        fh.write(header)
+        fh_off.write(header)
         for p_gname in clpsed:
             temp = clpsed[p_gname]
-            fh.write(f'{p_gname}\t{pgene_info[p_gname]}\t[{",".join(temp[0])}]')
-            fh.write(f'\t[{",".join(temp[1])}]\t[{",".join(temp[2])}]\n')
-            gnames = temp[0]
 
+            # build the line once, reuse for both files
+            line = (
+                f'{p_gname}\t{pgene_info[p_gname]}\t[{",".join(temp[0])}]'
+                f'\t[{",".join(temp[1])}]\t[{",".join(temp[2])}]\n')
+            
+            fh.write(line)
+
+            # Off-target condition: aligned to more than one gene or different gene
+            if len(temp[0]) == 0:
+                continue
+            elif len(temp[0]) == 1:
+                if p_gname != temp[0][0]:
+                    fh_off.write(line)
+                else:
+                    continue
+            elif len(temp[0]) > 1:
+                fh_off.write(line)
+            else:
+                continue
+
+            gnames = temp[0]
             off = False
             missed = True
             p_genes = [p_gname]
@@ -168,8 +189,9 @@ def write_summary(d, agg, pgene_info, gene_syns):
                 off_target.append(p_gname)
             if missed:
                 missed_target.append(p_gname)
-    print(message(f"number of missed probe genes: {len(missed_target)}", Mtype.PROG))
-    print(message(f"number of off-target probe genes: {len(off_target)}", Mtype.PROG))
+    
+    print(message(f"{len(missed_target)} missed probe genes. See stat_missed_genes.txt", Mtype.RESULT))
+    print(message(f"{len(off_target)} genes with off-target probe. See stat_off_target_genes.txt", Mtype.RESULT))
     write_lst2file(missed_target, os.path.join(d, 'stat_missed_genes.txt'))
     write_lst2file(off_target, os.path.join(d, 'stat_off_target_genes.txt'))
 
@@ -198,12 +220,20 @@ def load_gene_syns(fn) -> dict:
     return gene_syns
 
 def main(args) -> None:
+    print(message(f"STAT module is summarizing OPT predictions", Mtype.START))
     gene_syns = load_gene_syns(args.syn_file) if args.syn_file else []
     pgene_info = load_pgene_info(args.query)
     if args.in_file is None:
         args.in_file = os.path.join(args.out_dir, 'probe2targets.tsv')
     track_df = pd.read_csv(args.in_file, sep='\t')
     prb_gene_tbl = load_track_results(track_df, args.out_dir, gene_syns, args.exclude_pseudo, args.pc_only)
-    print(message(f"number of probe genes: {len(prb_gene_tbl)}", Mtype.PROG))
+    # print(message(f"number of probe genes: {len(prb_gene_tbl)}", Mtype.PROG))
     agg = summarize(prb_gene_tbl, args.exclude_pseudo, args.pc_only)
     write_summary(args.out_dir, agg, pgene_info, gene_syns)
+    
+    print(message(f"finished summarizing off-targets. See the below files for results:", Mtype.DONE))
+    print(message(f"collapsed_summary.tsv — Summary table of each target gene, number of probes, alignment destinations, total alignment hits, and per-gene probe counts", Mtype.DONE))
+    print(message(f"collapsed_summary_offtargets.tsv — Subset of collapsed_summary.tsv containing only probes with predicted off-target alignments", Mtype.DONE))
+    print(message(f"probes2target.tsv — Detailed mapping of probes to aligned genes, including CIGAR strings and transcript types (e.g., protein-coding, lncRNA)", Mtype.DONE))
+    print(message(f"probes2target_offtargets.tsv — Subset of probes2target.tsv containing only probes with predicted off-target alignments", Mtype.DONE))
+    print(message(f"DONE", Mtype.DONE))
